@@ -102,52 +102,67 @@ def faltan(tag=None):
 def capital():
     try:
         t = clean_tag(CLAN_DEFAULT)
-        data = api_fast(f"/clans/%23{t}/capitalraidseasons?limit=1")
+        data = api_fast(f"/clans/%23{t}/capitalraidseasons?limit=2") # traemos 2 por si acaso
         if not data.get("items"):
-            return jsonify({"en_curso": False, "msg": "Sin historial"})
+            return jsonify({"en_curso": False})
 
-        season = data["items"][0]
+        # Busca el que esté realmente ongoing (el más reciente)
+        season = None
+        for s in reversed(data["items"]):
+            if s.get("state") == "ongoing":
+                season = s
+                break
+        if not season:
+            season = data["items"][0]
+
         if season.get("state")!= "ongoing":
-            return jsonify({"en_curso": False, "msg": "No hay asalto activo"})
+            return jsonify({"en_curso": False})
 
         end_time = parse_coc_time(season["endTime"])
         ahora = datetime.now(timezone.utc)
-        diff = (end_time - ahora).total_seconds()
-        if diff < 0: diff = 0
+        diff = max(0, (end_time - ahora).total_seconds())
         horas = int(diff // 3600)
         mins = int((diff % 3600) // 60)
 
-        raid_members = { m["tag"]: m for m in season.get("members", []) }
+        # Normaliza tags a MAYUSCULAS para que no falle por # o minúsculas
+        raid_members = {}
+        for m in season.get("members", []):
+            tag = m.get("tag","").upper()
+            raid_members[tag] = m
+
         clan_data = api_fast(f"/clans/%23{t}")
         clan_members = clan_data.get("memberList", [])
 
         faltan_lista = []
         for cm in clan_members:
-            rm = raid_members.get(cm["tag"])
+            tag = cm["tag"].upper()
+            rm = raid_members.get(tag)
             if not rm:
+                # Si no está en la raid, es porque no ha atacado
                 faltan_lista.append({"name": cm["name"], "usados": 0, "faltan": 6, "limite": 6})
             else:
                 ataques = rm.get("attacks", 0)
                 limite = rm.get("attackLimit", 5) + rm.get("bonusAttackLimit", 0)
+                # Si limite viene 5 pero ya tiene 5 y tiene bonus, en juego sale 5/6
+                if limite < 5: limite = 5
                 faltan = limite - ataques
                 if faltan > 0:
                     faltan_lista.append({"name": rm["name"], "usados": ataques, "faltan": faltan, "limite": limite})
+                # si faltan == 0, NO lo agregamos (aquí se va ALFA, COR y Angel)
 
-        faltan_lista.sort(key=lambda x: x["faltan"])
+        faltan_lista.sort(key=lambda x: (x["faltan"], x["name"]))
 
         return jsonify({
             "en_curso": True,
             "clan": clan_data.get("name", "TopLand"),
             "faltan": len(faltan_lista),
             "faltan_lista": faltan_lista,
-            "total_saques": season.get("capitalTotalLoot", 0),
             "tiempo_texto": f"{horas}h {mins}m",
-            "tiempo_restante_seg": diff,
-            "fin": season["endTime"],
-            "participaron": len(raid_members)
+            "participaron": len(raid_members),
+            "fin": season["endTime"]
         })
     except Exception as e:
         return jsonify({"error": str(e), "en_curso": False})
-
+        
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
