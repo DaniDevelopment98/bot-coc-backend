@@ -103,5 +103,67 @@ def faltan(tag=None):
     except Exception as e:
         return jsonify({"error": str(e)})
 
+@app.route('/capital')
+def capital():
+    try:
+        t = clean_tag(CLAN_DEFAULT) # Quita el # -> 2Y9QJGCVV
+        clan_data = api_fast(f"/clans/%23{t}")
+        if clan_data.get("reason"):
+            return jsonify({"en_curso": False, "error": clan_data})
+
+        miembros = clan_data.get('memberList', [])
+
+        # Trae la última temporada de capital
+        capital_data = api_fast(f"/clans/%23{t}/capitalraidseasons?limit=1")
+        items = capital_data.get('items', [])
+        if not items:
+            return jsonify({"en_curso": False, "msg": "Sin datos de capital"})
+
+        temporada = items[0]
+        fin = parse_coc_time(temporada['endTime'])
+        ahora = datetime.now(timezone.utc)
+
+        # Si ya terminó, no hay asalto
+        if fin < ahora or temporada.get('state') == 'ended' and (ahora - fin).total_seconds() > 86400*3:
+            # Si el endTime ya pasó, no está en curso
+            if fin < ahora:
+                return jsonify({"en_curso": False, "msg": "No hay asalto activo ahora", "ultimo_fin": temporada['endTime']})
+
+        en_curso = fin > ahora
+        if not en_curso:
+            return jsonify({"en_curso": False, "msg": "No hay asalto activo", "fin": temporada['endTime']})
+
+        atacantes = {m['tag']: m for m in temporada.get('members', [])}
+
+        faltan_lista = []
+        for m in miembros:
+            reg = atacantes.get(m['tag'])
+            if not reg:
+                faltan_lista.append({"name": m['name'], "tag": m['tag'], "faltan": 5, "usados": 0})
+            else:
+                usados = reg.get('attacks', 0)
+                limite = reg.get('attackLimit', 5) + reg.get('bonusAttackLimit', 0)
+                faltan = limite - usados
+                if faltan > 0:
+                    faltan_lista.append({"name": m['name'], "tag": m['tag'], "faltan": faltan, "usados": usados})
+
+        segundos = int((fin - ahora).total_seconds())
+        horas = segundos // 3600
+        mins = (segundos % 3600) // 60
+
+        return jsonify({
+            "en_curso": True,
+            "clan": clan_data.get('name'),
+            "faltan": len(faltan_lista),
+            "tiempo_restante_seg": segundos,
+            "tiempo_texto": f"{horas}h {mins}m",
+            "fin": temporada['endTime'],
+            "faltan_lista": faltan_lista,
+            "total_saques": temporada.get('capitalTotalLoot', 0)
+        })
+    except Exception as e:
+        return jsonify({"error": True, "msg": str(e)})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
