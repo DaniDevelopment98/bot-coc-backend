@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-import requests, os, time
+import requests, os, time, re
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -59,18 +59,49 @@ def guerra(tag=None):
     t = clean_tag(tag) if tag else clean_tag(CLAN_DEFAULT)
     return jsonify(api_fast(f"/clans/%23{t}/currentwar"))
 
+def parse_coc_time(timestr):
+    # Convierte "20240514T..." a datetime
+    return datetime.strptime(timestr, "%Y%m%dT%H%M%S.000Z").replace(tzinfo=timezone.utc)
+
 @app.route("/faltan")
 @app.route("/faltan/<tag>")
 def faltan(tag=None):
-    t = clean_tag(tag) if tag else clean_tag(CLAN_DEFAULT)
-    war = api_fast(f"/clans/%23{t}/currentwar")
-    if war.get("state") == "notInWar":
-        return jsonify({"error": "No están en guerra", "raw": war})
-    faltan_lista = []
-    for m in war.get("clan", {}).get("members", []):
-        if m.get("attacks") is None or len(m.get("attacks", [])) < war.get("attacksPerMember", 2):
-            faltan_lista.append({"name": m["name"], "attacks_used": len(m.get("attacks", [])), "mapPosition": m.get("mapPosition")})
-    return jsonify({"clan": war.get("clan", {}).get("name"), "faltan": len(faltan_lista), "faltan_lista": faltan_lista})
+    try:
+        t = clean_tag(tag) if tag else clean_tag(CLAN_DEFAULT)
+        war = api_fast(f"/clans/%23{t}/currentwar")
+        
+        if war.get("state") == "notInWar" or war.get("reason"):
+            return jsonify({"error": "No están en guerra", "raw": war})
+
+        # Tiempo restante
+        end_time = parse_coc_time(war["endTime"])
+        ahora = datetime.now(timezone.utc)
+        diff = (end_time - ahora).total_seconds()
+        if diff < 0: diff = 0
+        horas = int(diff // 3600)
+        mins = int((diff % 3600) // 60)
+
+        faltan_lista = []
+        for m in war["clan"]["members"]:
+            if m.get("attacks") is None or len(m.get("attacks", [])) < 2:
+                usados = 0 if m.get("attacks") is None else len(m.get("attacks", []))
+                faltan_lista.append({
+                    "name": m["name"],
+                    "mapPosition": m["mapPosition"],
+                    "attacks_used": usados,
+                    "faltan": 2 - usados
+                })
+        
+        return jsonify({
+            "clan": war["clan"]["name"],
+            "faltan": len(faltan_lista),
+            "faltan_lista": faltan_lista,
+            "tiempo_restante_seg": diff,
+            "tiempo_texto": f"{horas}h {mins}m",
+            "endTime": war["endTime"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
