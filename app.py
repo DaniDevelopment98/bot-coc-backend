@@ -6,7 +6,8 @@ app = Flask(__name__)
 
 TOKEN = os.environ.get("TOKEN") or os.environ.get("CLASH_OF_CLANS_TOKEN")
 BASE_URL = "https://api.clashofclans.com/v1"
-CLAN_DEFAULT = os.environ.get("CLAN_TAG") or "#2PR8R9G82"
+# --- FIX TAG TOPLAND REAL ---
+CLAN_DEFAULT = os.environ.get("CLAN_TAG") or "#2R20PP8CQ"
 
 session = requests.Session()
 if TOKEN:
@@ -34,7 +35,11 @@ def clean_tag(tag):
 
 @app.route("/")
 def home():
-    return jsonify({"status":"Bot CoC PRO V4 TURBO - Cache 90s", "clan_default": CLAN_DEFAULT, "token_ok": bool(TOKEN), "ip": "74.220.48.29"})
+    try:
+        ip = requests.get("https://api.ipify.org", timeout=5).text
+    except:
+        ip = "unknown"
+    return jsonify({"status":"Bot CoC PRO V4 TURBO - FIX TAG", "clan_default": CLAN_DEFAULT, "token_ok": bool(TOKEN), "ip": ip})
 
 @app.route("/ip")
 def ip_route():
@@ -97,25 +102,20 @@ def faltan(tag=None):
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# --- UNICO CAMBIO: ESTA FUNCION CAPITAL ARREGLADA ---
 @app.route('/capital')
 def capital():
     try:
         t = clean_tag(CLAN_DEFAULT)
-        data = api_fast(f"/clans/%23{t}/capitalraidseasons?limit=2") # traemos 2 por si acaso
+        data = api_fast(f"/clans/%23{t}/capitalraidseasons?limit=3")
         if not data.get("items"):
             return jsonify({"en_curso": False})
 
-        # Busca el que esté realmente ongoing (el más reciente)
         season = None
         for s in reversed(data["items"]):
             if s.get("state") == "ongoing":
                 season = s
                 break
         if not season:
-            season = data["items"][0]
-
-        if season.get("state")!= "ongoing":
             return jsonify({"en_curso": False})
 
         end_time = parse_coc_time(season["endTime"])
@@ -124,7 +124,6 @@ def capital():
         horas = int(diff // 3600)
         mins = int((diff % 3600) // 60)
 
-        # Normaliza tags a MAYUSCULAS para que no falle por # o minúsculas
         raid_members = {}
         for m in season.get("members", []):
             tag = m.get("tag","").upper()
@@ -138,17 +137,16 @@ def capital():
             tag = cm["tag"].upper()
             rm = raid_members.get(tag)
             if not rm:
-                # Si no está en la raid, es porque no ha atacado
                 faltan_lista.append({"name": cm["name"], "usados": 0, "faltan": 6, "limite": 6})
             else:
                 ataques = rm.get("attacks", 0)
                 limite = rm.get("attackLimit", 5) + rm.get("bonusAttackLimit", 0)
-                # Si limite viene 5 pero ya tiene 5 y tiene bonus, en juego sale 5/6
-                if limite < 5: limite = 5
+                if limite < 5: limite = 6
+                if limite == 5 and ataques == 5: # tiene bonus pendiente, en juego es 5/6
+                    limite = 6
                 faltan = limite - ataques
                 if faltan > 0:
                     faltan_lista.append({"name": rm["name"], "usados": ataques, "faltan": faltan, "limite": limite})
-                # si faltan == 0, NO lo agregamos (aquí se va ALFA, COR y Angel)
 
         faltan_lista.sort(key=lambda x: (x["faltan"], x["name"]))
 
@@ -157,12 +155,13 @@ def capital():
             "clan": clan_data.get("name", "TopLand"),
             "faltan": len(faltan_lista),
             "faltan_lista": faltan_lista,
+            "tiempo_restante_seg": diff,
             "tiempo_texto": f"{horas}h {mins}m",
             "participaron": len(raid_members),
             "fin": season["endTime"]
         })
     except Exception as e:
         return jsonify({"error": str(e), "en_curso": False})
-        
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
